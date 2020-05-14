@@ -152,10 +152,13 @@
 
 (defn modWhereSingle                                        ;WEIRD
   [initFrame cond]
-  (if (some (partial = "=") (changeCond (parseWhereCond (name (first cond)))))
-    (filter (comp (partial = (get (changeCond (parseWhereCond (name (first cond)))) 1)) (get (changeCond (parseWhereCond (name (first cond)))) 0)) initFrame)
-    (filter (comp (partial predicate (get (changeCond (parseWhereCond (name (first cond)))) 1)) (get (changeCond (parseWhereCond (name (first cond)))) 0)) initFrame)
-    )
+  (if (not (nil? cond))
+      (if (some (partial = "=") (changeCond (parseWhereCond (name (first cond)))))
+        (filter (comp (partial = (get (changeCond (parseWhereCond (name (first cond)))) 1)) (get (changeCond (parseWhereCond (name (first cond)))) 0)) initFrame)
+        (filter (comp (partial predicate (get (changeCond (parseWhereCond (name (first cond)))) 1)) (get (changeCond (parseWhereCond (name (first cond)))) 0)) initFrame)
+        )
+      initFrame
+      )
   )
 
 (defn modWhereAnd
@@ -238,12 +241,12 @@
 (defn modifyDFSbyWhereConds
   [qMap]
   (if (checkFormat (get qMap "FROM"))
-    (def firstFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (get qMap "FROM"))) 0 (vector))) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE"))))
-    (def firstFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (get qMap "FROM"))) 0 (vector))) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE"))))
+    (def firstFrame (vec (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (get qMap "FROM"))) 0 (vector))) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE")))))
+    (def firstFrame (vec (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (get qMap "FROM"))) 0 (vector))) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE")))))
     )
   (if (checkFormat (name (first (get qMap "INNER"))))
-    (def joinedFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (name (first (get qMap "INNER"))))) 0 (vector))) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE"))))
-    (def joinedFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (name (first (get qMap "INNER"))))) 0 (vector))) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE"))))
+    (def joinedFrame (vec (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (name (first (get qMap "INNER"))))) 0 (vector))) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE")))))
+    (def joinedFrame (vec (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (name (first (get qMap "INNER"))))) 0 (vector))) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE")))))
     )
   (vec (innerJoin firstFrame joinedFrame (keyword (get (parseOnCond qMap) 2)) (keyword (get (parseOnCond qMap) 5)) 0))
   )
