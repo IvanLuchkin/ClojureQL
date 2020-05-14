@@ -4,11 +4,11 @@
   (:require [clojure.string :as str]
             [clojure.data.csv :as csv]
             [clojure.java.io :as io]
-            [clojure.pprint :refer [print-table] :rename {print-table p}]
+            [clojure.pprint :refer [print-table] :rename {print-table print}]
             [clojure.set :as set]))
 
-(def keywords '("SELECT", "FROM", "JOIN", "WHERE", "GROUP", "HAVING", "ORDER"))
-(def kw_multi_arity '("SELECT", "WHERE", "ORDER"))
+(def keywords '("SELECT", "FROM", "WHERE", "ON", "GROUP", "HAVING", "ORDER"))
+(def kw_multi_arity '("SELECT", "WHERE", "ORDER", "INNER"))
 
 (defn isKeyword
   [word]
@@ -30,7 +30,7 @@
   [input_string_splitted]
   (if (not (empty? input_string_splitted))
     (if (not (isKeyword (first input_string_splitted)))
-      (if (or (= (first input_string_splitted) "AND") (= (first input_string_splitted) "OR") (= (first input_string_splitted) "BY") (= (first input_string_splitted) "DESC"))
+      (if (or (= (first input_string_splitted) "AND") (= (first input_string_splitted) "OR") (= (first input_string_splitted) "BY") (= (first input_string_splitted) "DESC") (= (first input_string_splitted) "JOIN"))
         (analyze-arguments (rest input_string_splitted))
         (conj (analyze-arguments (rest input_string_splitted)) (keyword (first input_string_splitted)))
         )  ;--------change--------
@@ -50,11 +50,30 @@
     )
   )
 
+(defn makeIntegersInVectorTAIL
+  [vector pos acc]
+  (if (< pos (count vector))
+    (if (and (every? #(Character/isDigit %) (get vector pos)) (not (str/blank? (get vector pos))))
+      (makeIntegersInVectorTAIL vector (+ 1 pos) (conj acc (Integer/parseInt (get vector pos))))
+      (makeIntegersInVectorTAIL vector (+ 1 pos) (conj acc (get vector pos)))
+      )
+    acc
+    )
+  )
+
 ;takes initial DF with integer-string values, returns DF with integers (where needed)
 (defn makeIntegersInDF
   [initialFrame pos]
   (if (< pos (count initialFrame))
     (conj (makeIntegersInDF initialFrame (+ 1 pos)) (zipmap (keys (get initialFrame pos)) (makeIntegersInVector (vec (vals (get initialFrame pos))) 0))))
+  )
+
+(defn makeIntegersInDFTAIL
+  [initialFrame pos acc]
+  (if (< pos (count initialFrame))
+    (makeIntegersInDFTAIL initialFrame (+ 1 pos) (conj acc (zipmap (keys (get initialFrame pos)) (makeIntegersInVectorTAIL (vec (vals (get initialFrame pos))) 0 (vector)))))
+    acc
+    )
   )
 
 ;takes VEC of input query, creates a map of key/value where key = SQL keyword, value = arg(s) of this keyword
@@ -88,11 +107,20 @@
 
 ;takes initial DF (file), 0, qMap and selectOption (SELECT / SELECT DISTINCT), returns DF with selected keys
 (defn getDFwithSelCols
-  [initFrame pos qMap]
+  [initFrame pos condList]
   (if (< pos (count initFrame))
-    (if (or (some (partial = :AVG) (get qMap "SELECT")) (some (partial = :MIN) (get qMap "SELECT")) (some (partial = :COUNT) (get qMap "SELECT")))
+    (if (or (some (partial = :AVG) condList) (some (partial = :MIN) condList) (some (partial = :COUNT) condList))
       initFrame
-      (conj (getDFwithSelCols initFrame (+ 1 pos) qMap) (colsFromMap (get initFrame pos) (get qMap "SELECT") {})))
+      (conj (getDFwithSelCols initFrame (+ 1 pos) condList) (colsFromMap (get initFrame pos) condList {})))
+    )
+  )
+
+(defn parseColNamesIJ
+  [list]
+  (if (not (empty? list))
+    (if (some (partial = :*) list)
+      '(:*)
+      (conj (parseColNamesIJ (rest list)) (keyword (get (str/split (name (first list)) #"\.") 2))))
     )
   )
 ;three following functions convert raw data from the file into VEC of MAPS (dataframe)
@@ -114,8 +142,8 @@
 (defn load
   [fname]
   (if (checkFormat fname)
-    (p (apply rawDataToMapVec (readCSV fname)))
-    (p (apply rawDataToMapVec (readTSV fname)))))
+    (print (apply rawDataToMapVec (readCSV fname)))
+    (print (apply rawDataToMapVec (readTSV fname)))))
 
 ;takes a qMap, returns a VEC with key, desirable val and comparison operator
 (defn predicate
@@ -176,17 +204,72 @@
   )
 
 (defn modifyDFbyWhereCond
-  [initFrame qMap]
+  [initFrame qMap condList]
   (if (get qMap "AND")
-    (modWhereAnd initFrame (get qMap "WHERE"))
+    (modWhereAnd initFrame condList)
     (if (get qMap "OR")
-      (flatten (modWhereOr initFrame (get qMap "WHERE") (vector)))
+      (flatten (modWhereOr initFrame condList (vector)))
       (if (nil? (get qMap "WHERE"))
         initFrame
-        (modWhereSingle initFrame (get qMap "WHERE"))
+        (modWhereSingle initFrame condList)
         )
       )
     )
+  )
+
+(defn getFrameKeys
+  [dataframe pos]
+  (if (< pos (count dataframe))
+    (conj (getFrameKeys dataframe (+ 1 pos)) (keys (get dataframe pos)))
+    )
+  )
+
+(defn getFrameConds
+  [frameName conds]
+  (if (not (empty? conds))
+    (if (.contains (name (first conds)) (name frameName))
+      (conj (getFrameConds (name frameName) (rest conds)) (get (str/split (name (first conds)) #"\.") 2))
+      (getFrameConds (name frameName) (rest conds))
+      )
+    )
+  )
+
+(defn parseOnCond
+  [qMap]
+  (str/split (str/replace (get qMap "ON") #"=" ".") #"\.")
+  )
+;next two could be replaced with (clojure.str/join firstFrame joinedFrame {(keyword (get (parseOnCond qMap) 2)) (keyword (get (parseOnCond qMap) 5))})
+(defn findRow
+  [joinedFrame key val pos]
+  (if (< pos (count joinedFrame))
+    (if (= (get (get joinedFrame pos) key) val)
+      (get joinedFrame pos)
+      (findRow joinedFrame key val (+ 1 pos))
+      )
+    )
+  )
+
+(defn innerJoin
+  [firstFrame joinedFrame keyFirst keyJoined pos]
+  (if (< pos (count firstFrame))
+    (if (not (nil? (findRow joinedFrame keyJoined (get (get firstFrame pos) keyFirst) 0)))
+      (conj (innerJoin firstFrame joinedFrame keyFirst keyJoined (+ 1 pos)) (merge (findRow joinedFrame keyJoined (get (get firstFrame pos) keyFirst) 0) (get firstFrame pos)))
+      (innerJoin firstFrame joinedFrame keyFirst keyJoined (+ 1 pos))
+      )
+    )
+  )
+
+(defn modifyDFSbyWhereConds
+  [qMap]
+  (if (checkFormat (get qMap "FROM"))
+    (def firstFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (get qMap "FROM"))) 0)) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE"))))
+    (def firstFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (get qMap "FROM"))) 0)) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE"))))
+    )
+  (if (checkFormat (name (first (get qMap "INNER"))))
+    (def joinedFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (name (first (get qMap "INNER"))))) 0)) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE"))))
+    (def joinedFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (name (first (get qMap "INNER"))))) 0)) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE"))))
+    )
+  (vec (innerJoin firstFrame joinedFrame (keyword (get (parseOnCond qMap) 2)) (keyword (get (parseOnCond qMap) 5)) 0))
   )
 
 (defn modifyDFbyOrderCond
@@ -235,13 +318,14 @@
   (def query (read-line))
   (def query-splited (str/split query #" "))
   ;creating a map with keywords & args
-  (def qMap (assoc (assoc (assoc (assoc (assoc (assoc (query-map query-splited {} 0)
+  (def qMap (assoc (assoc (assoc (assoc (assoc (assoc (assoc (query-map query-splited {} 0)
                             "AND" (= true (some (partial = "AND") query-splited)))
                             "OR" (= true (some (partial = "OR") query-splited)))
                             "DISTINCT" (= true (some (partial = "DISTINCT") query-splited)))
                             "ORDER_BY" (= true (and (some (partial = "ORDER") query-splited) (some (partial = "BY") query-splited))))
                             "DESC" (= true (some (partial = "DESC") query-splited)))
                             "SEL_FUNC" (= true (or (some (partial = "AVG") query-splited) (some (partial = "MIN") query-splited) (some (partial = "COUNT") query-splited))))
+                            "INNER_JOIN" (= true (some (partial = "INNER") query-splited)))
     )
 
   ;creating a dataframe (vec of maps) from the file (.csv or .tsv)
@@ -252,8 +336,14 @@
   ;printing the processed dataframe considering DISTINCT option and WHERE condition
 
   (if (get qMap "DISTINCT")
-    (p (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (distinct (vec (modifyDFbyWhereCond dataframe qMap))) qMap) 0 qMap) qMap))
-    (p (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (vec (modifyDFbyWhereCond dataframe qMap)) qMap) 0 qMap) qMap))
+    (if (get qMap "INNER_JOIN")
+      (print (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (distinct (vec (modifyDFSbyWhereConds qMap))) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap))
+      (print (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (distinct (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE")))) qMap) 0 (get qMap "SELECT")) qMap))
+      )
+    (if (get qMap "INNER_JOIN")
+      (print (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (vec (modifyDFSbyWhereConds qMap )) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap))
+      (print (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) qMap) 0 (get qMap "SELECT")) qMap))
+      )
     )
-  (-main)
+  ;SELECT mzs.csv.title mp-posts.csv.full_name FROM mzs.csv INNER JOIN mp-posts.csv ON mzs.csv.title=mp-posts.csv.full_name
   )
