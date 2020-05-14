@@ -17,14 +17,6 @@
   [word]
   (some (partial = word) kw_multi_arity))
 
-;takes LIST of VEC of input query, returns a LIST of all the SQL keywords in query
-(defn analyze-keywords
-  [input_string_splitted]
-  (if (not (empty? input_string_splitted))
-    (if (isKeyword (first input_string_splitted))
-      (conj (analyze-keywords (rest input_string_splitted)) (first input_string_splitted))
-      (analyze-keywords (rest input_string_splitted)))))
-
 ;takes LIST, returns LIST
 (defn analyze-arguments
   [input_string_splitted]
@@ -41,21 +33,11 @@
 
 ;takes VEC of vals, converts any integer-string into integers
 (defn makeIntegersInVector
-  [vector pos]
-  (if (< pos (count vector))
-    (if (and (every? #(Character/isDigit %) (get vector pos)) (not (str/blank? (get vector pos))))
-      (conj (makeIntegersInVector vector (+ 1 pos)) (Integer/parseInt (get vector pos)))
-      (conj (makeIntegersInVector vector (+ 1 pos)) (get vector pos))
-      )
-    )
-  )
-
-(defn makeIntegersInVectorTAIL
   [vector pos acc]
   (if (< pos (count vector))
     (if (and (every? #(Character/isDigit %) (get vector pos)) (not (str/blank? (get vector pos))))
-      (makeIntegersInVectorTAIL vector (+ 1 pos) (conj acc (Integer/parseInt (get vector pos))))
-      (makeIntegersInVectorTAIL vector (+ 1 pos) (conj acc (get vector pos)))
+      (makeIntegersInVector vector (+ 1 pos) (conj acc (Integer/parseInt (get vector pos))))
+      (makeIntegersInVector vector (+ 1 pos) (conj acc (get vector pos)))
       )
     acc
     )
@@ -63,15 +45,9 @@
 
 ;takes initial DF with integer-string values, returns DF with integers (where needed)
 (defn makeIntegersInDF
-  [initialFrame pos]
-  (if (< pos (count initialFrame))
-    (conj (makeIntegersInDF initialFrame (+ 1 pos)) (zipmap (keys (get initialFrame pos)) (makeIntegersInVector (vec (vals (get initialFrame pos))) 0))))
-  )
-
-(defn makeIntegersInDFTAIL
   [initialFrame pos acc]
   (if (< pos (count initialFrame))
-    (makeIntegersInDFTAIL initialFrame (+ 1 pos) (conj acc (zipmap (keys (get initialFrame pos)) (makeIntegersInVectorTAIL (vec (vals (get initialFrame pos))) 0 (vector)))))
+    (makeIntegersInDF initialFrame (+ 1 pos) (conj acc (zipmap (keys (get initialFrame pos)) (makeIntegersInVector (vec (vals (get initialFrame pos))) 0 (vector)))))
     acc
     )
   )
@@ -133,7 +109,7 @@
     (doall
       (csv/read-csv reader))))
 (defn rawDataToMapVec [head & lines]
-  (vec (map #(zipmap (map keyword head) %1) lines)))        ;------change------
+  (vec (map #(zipmap (map keyword head) %1) lines)))
 
 (defn checkFormat [name]
   (def fformat (str/split name #"\."))
@@ -262,12 +238,12 @@
 (defn modifyDFSbyWhereConds
   [qMap]
   (if (checkFormat (get qMap "FROM"))
-    (def firstFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (get qMap "FROM"))) 0)) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE"))))
-    (def firstFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (get qMap "FROM"))) 0)) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE"))))
+    (def firstFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (get qMap "FROM"))) 0 (vector))) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE"))))
+    (def firstFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (get qMap "FROM"))) 0 (vector))) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE"))))
     )
   (if (checkFormat (name (first (get qMap "INNER"))))
-    (def joinedFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (name (first (get qMap "INNER"))))) 0)) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE"))))
-    (def joinedFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (name (first (get qMap "INNER"))))) 0)) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE"))))
+    (def joinedFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (name (first (get qMap "INNER"))))) 0 (vector))) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE"))))
+    (def joinedFrame (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (name (first (get qMap "INNER"))))) 0 (vector))) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE"))))
     )
   (vec (innerJoin firstFrame joinedFrame (keyword (get (parseOnCond qMap) 2)) (keyword (get (parseOnCond qMap) 5)) 0))
   )
@@ -330,8 +306,8 @@
 
   ;creating a dataframe (vec of maps) from the file (.csv or .tsv)
   (if (checkFormat (get qMap "FROM"))
-    (def dataframe (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (get qMap "FROM"))) 0)))
-    (def dataframe (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (get qMap "FROM"))) 0)))
+    (def dataframe (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (get qMap "FROM"))) 0 (vector))))
+    (def dataframe (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (get qMap "FROM"))) 0 (vector))))
     )
   ;printing the processed dataframe considering DISTINCT option and WHERE condition
 
