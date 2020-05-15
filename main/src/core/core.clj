@@ -8,7 +8,7 @@
             [clojure.set :as set]))
 
 (def keywords '("SELECT", "FROM", "WHERE", "ON", "GROUP", "HAVING", "ORDER"))
-(def kw_multi_arity '("SELECT", "WHERE", "ORDER", "INNER"))
+(def kw_multi_arity '("SELECT", "WHERE", "ORDER", "INNER", "FULL", "LEFT"))
 
 (defn isKeyword
   [word]
@@ -218,6 +218,7 @@
   (str/split (str/replace (get qMap "ON") #"=" ".") #"\.")
   )
 ;next two could be replaced with (clojure.str/join firstFrame joinedFrame {(keyword (get (parseOnCond qMap) 2)) (keyword (get (parseOnCond qMap) 5))})
+;finRow is a helper function to innerJoin
 (defn findRow
   [joinedFrame key val pos]
   (if (< pos (count joinedFrame))
@@ -227,7 +228,6 @@
       )
     )
   )
-
 (defn innerJoin
   [firstFrame joinedFrame keyFirst keyJoined pos]
   (if (< pos (count firstFrame))
@@ -238,17 +238,35 @@
     )
   )
 
-(defn modifyDFSbyWhereConds
+(defn fullJoin
+  [firstFrame joinedFrame keyFirst keyJoined]
+  (def ds_one (zipmap (mapv keyFirst firstFrame) firstFrame))
+  (def ds_two (zipmap (mapv keyJoined joinedFrame) joinedFrame))
+  (vals (merge-with merge ds_one ds_two))
+  )
+
+(defn leftJoin
+  [firstFrame joinedFrame keyFirst keyJoined]
+  (filter #(some (partial contains? %) (list keyFirst)) (vec (fullJoin firstFrame joinedFrame keyFirst keyJoined)))
+
+  )
+
+;modifies two DFS by their internal WHERE conditions, then applies INNER JOIN
+(defn modifyDFSbyIWandJoin
   [qMap]
   (if (checkFormat (get qMap "FROM"))
     (def firstFrame (vec (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (get qMap "FROM"))) 0 (vector))) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE")))))
     (def firstFrame (vec (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (get qMap "FROM"))) 0 (vector))) qMap (getFrameConds (get qMap "FROM") (get qMap "WHERE")))))
     )
-  (if (checkFormat (name (first (get qMap "INNER"))))
-    (def joinedFrame (vec (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (name (first (get qMap "INNER"))))) 0 (vector))) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE")))))
-    (def joinedFrame (vec (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (name (first (get qMap "INNER"))))) 0 (vector))) qMap (getFrameConds (name (first (get qMap "INNER"))) (get qMap "WHERE")))))
+  (if (checkFormat (name (first (get qMap (get qMap "JOIN")))))
+    (def joinedFrame (vec (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (name (first (get qMap (get qMap "JOIN")))))) 0 (vector))) qMap (getFrameConds (name (first (get qMap (get qMap "JOIN")))) (get qMap "WHERE")))))
+    (def joinedFrame (vec (modifyDFbyWhereCond (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (name (first (get qMap (get qMap "JOIN")))))) 0 (vector))) qMap (getFrameConds (name (first (get qMap (get qMap "JOIN")))) (get qMap "WHERE")))))
     )
-  (vec (innerJoin firstFrame joinedFrame (keyword (get (parseOnCond qMap) 2)) (keyword (get (parseOnCond qMap) 5)) 0))
+  (case (get qMap "JOIN")
+    "INNER" (vec (innerJoin firstFrame joinedFrame (keyword (get (parseOnCond qMap) 2)) (keyword (get (parseOnCond qMap) 5)) 0))
+    "FULL" (vec (fullJoin firstFrame joinedFrame (keyword (get (parseOnCond qMap) 2)) (keyword (get (parseOnCond qMap) 5))))
+    "LEFT" (vec (leftJoin firstFrame joinedFrame (keyword (get (parseOnCond qMap) 2)) (keyword (get (parseOnCond qMap) 5))))
+    )
   )
 
 (defn modifyDFbyOrderCond
@@ -291,13 +309,27 @@
     )
   )
 
+(defn getJoinType
+  [qMap]
+  (if (get qMap "INNER_JOIN")
+    (assoc qMap "JOIN" "INNER")
+    (if (get qMap "FULL_JOIN")
+      (assoc qMap "JOIN" "FULL")
+      (if (get qMap "LEFT_JOIN")
+        (assoc qMap "JOIN" "LEFT")
+        qMap
+        )
+      )
+    )
+  )
+
 (defn -main
   [& args]
   ;receiving a query
   (def query (read-line))
   (def query-splited (str/split query #" "))
   ;creating a map with keywords & args
-  (def qMap (assoc (assoc (assoc (assoc (assoc (assoc (assoc (query-map query-splited {} 0)
+  (def qMap (getJoinType (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (query-map query-splited {} 0)
                             "AND" (= true (some (partial = "AND") query-splited)))
                             "OR" (= true (some (partial = "OR") query-splited)))
                             "DISTINCT" (= true (some (partial = "DISTINCT") query-splited)))
@@ -305,6 +337,8 @@
                             "DESC" (= true (some (partial = "DESC") query-splited)))
                             "SEL_FUNC" (= true (or (some (partial = "AVG") query-splited) (some (partial = "MIN") query-splited) (some (partial = "COUNT") query-splited))))
                             "INNER_JOIN" (= true (some (partial = "INNER") query-splited)))
+                            "FULL_JOIN" (= true (some (partial = "FULL") query-splited)))
+                            "LEFT_JOIN" (= true (some (partial = "LEFT") query-splited))))
     )
 
   ;creating a dataframe (vec of maps) from the file (.csv or .tsv)
@@ -315,12 +349,14 @@
   ;printing the processed dataframe considering DISTINCT option and WHERE condition
 
   (if (get qMap "DISTINCT")
-    (if (get qMap "INNER_JOIN")
-      (print (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (distinct (vec (modifyDFSbyWhereConds qMap))) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap))
+    (if (not (nil? (get qMap "JOIN")))
+      (print (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (distinct (vec (modifyDFSbyIWandJoin qMap))) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)) 0)))
+        (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (distinct (vec (modifyDFSbyIWandJoin qMap))) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap))
       (print (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (distinct (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE")))) qMap) 0 (get qMap "SELECT")) qMap))
       )
-    (if (get qMap "INNER_JOIN")
-      (print (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (vec (modifyDFSbyWhereConds qMap )) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap))
+    (if (not (nil? (get qMap "JOIN")))
+      (print (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (vec (modifyDFSbyIWandJoin qMap)) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)) 0)))
+        (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (vec (modifyDFSbyIWandJoin qMap)) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap))
       (print (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) qMap) 0 (get qMap "SELECT")) qMap))
       )
     )
