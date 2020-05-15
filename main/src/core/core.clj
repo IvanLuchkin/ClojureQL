@@ -294,7 +294,7 @@
     acc
     )
   )
-
+;conj produced vector to DF with sel cols, pasing (rest (get qMap "SELECT")) as cols to colsFromMap ----------- ! ! ! FOR GROUP BY FEATURE ! ! ! -----------
 (defn considerSELFunc
   [initFrame qMap]
   (if (= "MIN" (name (first (get qMap "SELECT"))))
