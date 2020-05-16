@@ -8,7 +8,7 @@
             [clojure.set :as set]))
 
 (def keywords '("SELECT", "FROM", "WHERE", "ON", "GROUP", "HAVING", "ORDER"))
-(def kw_multi_arity '("SELECT", "WHERE", "ORDER", "INNER", "FULL", "LEFT"))
+(def kw_multi_arity '("SELECT", "WHERE", "ORDER", "INNER", "FULL", "LEFT", "GROUP"))
 
 (defn isKeyword
   [word]
@@ -81,13 +81,44 @@
     )
   )
 
+(defn countInCol
+  [initFrame key pos acc]
+  (if (< pos (count initFrame))
+    (countInCol initFrame key (+ 1 pos) (+ acc 1))
+    acc
+    )
+  )
+
+(defn sumInCol
+  [initFrame key pos acc]
+  (if (< pos (count initFrame))
+    (sumInCol initFrame key (+ 1 pos) (+ acc (get (get initFrame pos) key)))
+    acc
+    )
+  )
+
+;conj produced vector to DF with sel cols, passing (rest (get qMap "SELECT")) as cols to colsFromMap ----------- ! ! ! FOR GROUP BY FEATURE ! ! ! -----------
+(defn calcAggFunc
+  [initFrame aggFunc]
+  (if (= "MIN" (name (first aggFunc)))
+    (vector {(str/join (vector "MIN(" (name (peek (reverse aggFunc))) ")")) (get (apply min-key (peek (reverse aggFunc)) initFrame) (peek (reverse aggFunc)))})
+    (if (= "AVG" (name (first aggFunc)))
+      (vector {(str/join (vector "AVG(" (name (peek (reverse aggFunc))) ")")) (unchecked-divide-int (sumInCol initFrame (peek (reverse aggFunc)) 0 0) (countInCol initFrame (peek (reverse aggFunc)) 0 0))})
+      (if (= "COUNT" (name (first aggFunc)))
+        (vector {(str/join (vector "COUNT(" (name (peek (reverse aggFunc))) ")")) (countInCol initFrame (peek (reverse aggFunc)) 0 0)})
+        initFrame
+        )
+      )
+    )
+  )
+
 ;takes initial DF (file), 0, qMap and selectOption (SELECT / SELECT DISTINCT), returns DF with selected keys
 (defn getDFwithSelCols
-  [initFrame pos condList]
+  [initFrame pos colList]
   (if (< pos (count initFrame))
-    (if (or (some (partial = :AVG) condList) (some (partial = :MIN) condList) (some (partial = :COUNT) condList))
-      initFrame
-      (conj (getDFwithSelCols initFrame (+ 1 pos) condList) (colsFromMap (get initFrame pos) condList {})))
+    (if (or (some (partial = :AVG) colList) (some (partial = :MIN) colList) (some (partial = :COUNT) colList))
+      (concat (calcAggFunc initFrame (list (first colList) (second colList))) (conj (getDFwithSelCols initFrame (+ 1 pos) (rest (rest colList))) (colsFromMap (get initFrame pos) (rest (rest colList)) {}))) ;;;;;;;;
+      (conj (getDFwithSelCols initFrame (+ 1 pos) colList) (colsFromMap (get initFrame pos) colList {})))
     )
   )
 
@@ -279,36 +310,6 @@
     initFrame)
   )
 
-(defn countInCol
-  [initFrame key pos acc]
-  (if (< pos (count initFrame))
-    (countInCol initFrame key (+ 1 pos) (+ acc 1))
-    acc
-    )
-  )
-
-(defn sumInCol
-  [initFrame key pos acc]
-  (if (< pos (count initFrame))
-    (sumInCol initFrame key (+ 1 pos) (+ acc (get (get initFrame pos) key)))
-    acc
-    )
-  )
-;conj produced vector to DF with sel cols, pasing (rest (get qMap "SELECT")) as cols to colsFromMap ----------- ! ! ! FOR GROUP BY FEATURE ! ! ! -----------
-(defn considerSELFunc
-  [initFrame qMap]
-  (if (= "MIN" (name (first (get qMap "SELECT"))))
-    (vector {(str/join (vector "MIN(" (name (peek (reverse (get qMap "SELECT")))) ")")) (get (apply min-key (peek (reverse (get qMap "SELECT"))) initFrame) (peek (reverse (get qMap "SELECT"))))})
-    (if (= "AVG" (name (first (get qMap "SELECT"))))
-      (vector {(str/join (vector "AVG(" (name (peek (reverse (get qMap "SELECT")))) ")")) (unchecked-divide-int (sumInCol initFrame (peek (reverse (get qMap "SELECT"))) 0 0) (countInCol initFrame (peek (reverse (get qMap "SELECT"))) 0 0))})
-      (if (= "COUNT" (name (first (get qMap "SELECT"))))
-        (vector {(str/join (vector "COUNT(" (name (peek (reverse (get qMap "SELECT")))) ")")) (countInCol initFrame (peek (reverse (get qMap "SELECT"))) 0 0)})
-        initFrame
-        )
-      )
-    )
-  )
-
 (defn getJoinType
   [qMap]
   (if (get qMap "INNER_JOIN")
@@ -323,41 +324,62 @@
     )
   )
 
+(defn createSubset
+  [initFrame resFrame val pos]
+  (if (< pos (count initFrame))
+
+
+
+
+    )
+
+  )
+
+(defn groupBy
+  [initFrame qMap resFrame key pos]
+
+  )
+
+(defn createQueryMap
+  [query-splited]
+  (getJoinType (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (query-map query-splited {} 0)
+                                                                                "AND" (= true (some (partial = "AND") query-splited)))
+                                                                         "OR" (= true (some (partial = "OR") query-splited)))
+                                                                  "DISTINCT" (= true (some (partial = "DISTINCT") query-splited)))
+                                                           "ORDER_BY" (= true (and (some (partial = "ORDER") query-splited) (some (partial = "BY") query-splited))))
+                                                    "DESC" (= true (some (partial = "DESC") query-splited)))
+                                             "SEL_FUNC" (= true (or (some (partial = "AVG") query-splited) (some (partial = "MIN") query-splited) (some (partial = "COUNT") query-splited))))
+                                      "INNER_JOIN" (= true (some (partial = "INNER") query-splited)))
+                               "FULL_JOIN" (= true (some (partial = "FULL") query-splited)))
+                        "LEFT_JOIN" (= true (some (partial = "LEFT") query-splited)))
+                 "GROUP_BY" (= true (some (partial = "GROUP") query-splited))))
+  )
+
 (defn -main
   [& args]
   ;receiving a query
   (def query (read-line))
   (def query-splited (str/split query #" "))
   ;creating a map with keywords & args
-  (def qMap (getJoinType (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (query-map query-splited {} 0)
-                            "AND" (= true (some (partial = "AND") query-splited)))
-                            "OR" (= true (some (partial = "OR") query-splited)))
-                            "DISTINCT" (= true (some (partial = "DISTINCT") query-splited)))
-                            "ORDER_BY" (= true (and (some (partial = "ORDER") query-splited) (some (partial = "BY") query-splited))))
-                            "DESC" (= true (some (partial = "DESC") query-splited)))
-                            "SEL_FUNC" (= true (or (some (partial = "AVG") query-splited) (some (partial = "MIN") query-splited) (some (partial = "COUNT") query-splited))))
-                            "INNER_JOIN" (= true (some (partial = "INNER") query-splited)))
-                            "FULL_JOIN" (= true (some (partial = "FULL") query-splited)))
-                            "LEFT_JOIN" (= true (some (partial = "LEFT") query-splited))))
-    )
+  (def qMap (createQueryMap query-splited))
 
   ;creating a dataframe (vec of maps) from the file (.csv or .tsv)
   (if (checkFormat (get qMap "FROM"))
     (def dataframe (vec (makeIntegersInDF (apply rawDataToMapVec (readCSV (get qMap "FROM"))) 0 (vector))))
     (def dataframe (vec (makeIntegersInDF (apply rawDataToMapVec (readTSV (get qMap "FROM"))) 0 (vector))))
     )
-  ;printing the processed dataframe considering DISTINCT option and WHERE condition
-
   (if (get qMap "DISTINCT")
     (if (not (nil? (get qMap "JOIN")))
-      (print (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (distinct (vec (modifyDFSbyIWandJoin qMap))) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)) 0)))
-        (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (distinct (vec (modifyDFSbyIWandJoin qMap))) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap))
-      (print (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (distinct (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE")))) qMap) 0 (get qMap "SELECT")) qMap))
+      (print (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (distinct (vec (modifyDFSbyIWandJoin qMap))) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)) 0)))
+        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols  (distinct (vec (modifyDFSbyIWandJoin qMap))) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)))
+      (print (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (distinct (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE")))) 0 (get qMap "SELECT")) qMap)) 0)))
+        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (distinct (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE")))) 0 (get qMap "SELECT")) qMap)))
       )
     (if (not (nil? (get qMap "JOIN")))
-      (print (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (vec (modifyDFSbyIWandJoin qMap)) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)) 0)))
-        (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (vec (modifyDFSbyIWandJoin qMap)) qMap) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap))
-      (print (modifyDFbyOrderCond (getDFwithSelCols (considerSELFunc (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) qMap) 0 (get qMap "SELECT")) qMap))
+      (print (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFSbyIWandJoin qMap)) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)) 0)))
+        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFSbyIWandJoin qMap)) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)))
+      (print (vec (remove nil? (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) 0 (get qMap "SELECT")) qMap)) 0)))))
+        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) 0 (get qMap "SELECT")) qMap)))
       )
     )
   ;SELECT mzs.csv.title mp-posts.csv.full_name FROM mzs.csv INNER JOIN mp-posts.csv ON mzs.csv.title=mp-posts.csv.full_name
