@@ -8,7 +8,7 @@
             [clojure.set :as set]))
 
 (def keywords '("SELECT", "FROM", "WHERE", "ON", "GROUP", "HAVING", "ORDER"))
-(def kw_multi_arity '("SELECT", "WHERE", "ORDER", "INNER", "FULL", "LEFT", "GROUP"))
+(def kw_multi_arity '("SELECT", "WHERE", "ORDER", "INNER", "FULL", "LEFT", "GROUP", "HAVING"))
 
 (defn isKeyword
   [word]
@@ -101,11 +101,11 @@
 (defn calcAggFunc
   [initFrame aggFunc]
   (if (= "MIN" (name (first aggFunc)))
-    (vector {(str/join (vector "MIN(" (name (peek (reverse aggFunc))) ")")) (get (apply min-key (peek (reverse aggFunc)) initFrame) (peek (reverse aggFunc)))})
+    (vector {(keyword (str/join (vector "MIN(" (name (peek (reverse aggFunc))) ")"))) (get (apply min-key (peek (reverse aggFunc)) initFrame) (peek (reverse aggFunc)))})
     (if (= "AVG" (name (first aggFunc)))
-      (vector {(str/join (vector "AVG(" (name (peek (reverse aggFunc))) ")")) (unchecked-divide-int (sumInCol initFrame (peek (reverse aggFunc)) 0 0) (countInCol initFrame (peek (reverse aggFunc)) 0 0))})
+      (vector {(keyword (str/join (vector "AVG(" (name (peek (reverse aggFunc))) ")"))) (unchecked-divide-int (sumInCol initFrame (peek (reverse aggFunc)) 0 0) (countInCol initFrame (peek (reverse aggFunc)) 0 0))})
       (if (= "COUNT" (name (first aggFunc)))
-        (vector {(str/join (vector "COUNT(" (name (peek (reverse aggFunc))) ")")) (countInCol initFrame (peek (reverse aggFunc)) 0 0)})
+        (vector {(keyword (str/join (vector "COUNT(" (name (peek (reverse aggFunc))) ")"))) (countInCol initFrame (peek (reverse aggFunc)) 0 0)}) ;;;;;;;;;;;;;;;;;;;;;;;;;;; delete keyword func call
         initFrame
         )
       )
@@ -129,7 +129,7 @@
   [initFrame pos colList]
   (if (< pos (count initFrame))
     (if (or (some (partial = :AVG) colList) (some (partial = :MIN) colList) (some (partial = :COUNT) colList))
-      (concat (calcAggFunc initFrame (list (first colList) (second colList))) (conj (getGroupedDF initFrame (+ 1 pos) (rest (rest colList))) (colsFromMap (get initFrame pos) (rest (rest colList)) {}))) ;;;;;;;;
+      (concat (calcAggFunc initFrame (list (name (first colList)) (name (second colList)))) (conj (getGroupedDF initFrame (+ 1 pos) (rest (rest colList))) (colsFromMap (get initFrame pos) (rest (rest colList)) {}))) ;;;;;;;;-----------::-:--
       (conj (getGroupedDF initFrame (+ 1 pos) colList) (colsFromMap (get initFrame pos) colList {})))
     )
   )
@@ -166,8 +166,6 @@
   (if (checkFormat fname)
     (print (apply rawDataToMapVec (readCSV fname)))
     (print (apply rawDataToMapVec (readTSV fname)))))
-
-;takes a qMap, returns a VEC with key, desirable val and comparison operator
 (defn predicate
   [val1 val2]
   (if (= val2 "")
@@ -175,6 +173,7 @@
     (> val2 val1)
     )
   )
+
 (defn parseWhereCond
   [cond]
   (if (not (nil? cond))
@@ -189,8 +188,14 @@
   [vec]
   (if (not (nil? vec))
     (if (every? #(Character/isDigit %) (get vec 1))
-      (vector (keyword (get vec 0)) (Integer/parseInt (get vec 1)) (get vec 2))
-      (vector (keyword (get vec 0)) (get vec 1) (get vec 2))
+      (if (or (.contains (get vec 0) "AVG") (.contains (get vec 0) "COUNT") (.contains (get vec 0) "MIN"))
+        (vector (keyword (get vec 0)) (Integer/parseInt (get vec 1)) (get vec 2)) ;;AAA;;
+        (vector (keyword (get vec 0)) (Integer/parseInt (get vec 1)) (get vec 2))
+        )
+      (if (or (.contains (get vec 0) "AVG") (.contains (get vec 0) "COUNT") (.contains (get vec 0) "MIN"))
+        (vector (keyword (get vec 0)) (get vec 1) (get vec 2)) ;;AAA;;
+        (vector (keyword (get vec 0)) (get vec 1) (get vec 2))
+        )
       )
     nil
     )
@@ -264,7 +269,7 @@
   (str/split (str/replace (get qMap "ON") #"=" ".") #"\.")
   )
 ;next two could be replaced with (clojure.str/join firstFrame joinedFrame {(keyword (get (parseOnCond qMap) 2)) (keyword (get (parseOnCond qMap) 5))})
-;finRow is a helper function to innerJoin
+;findRow is a helper function to innerJoin
 (defn findRow
   [joinedFrame key val pos]
   (if (< pos (count joinedFrame))
@@ -283,14 +288,12 @@
       )
     )
   )
-
 (defn fullJoin
   [firstFrame joinedFrame keyFirst keyJoined]
   (def ds_one (zipmap (mapv keyFirst firstFrame) firstFrame))
   (def ds_two (zipmap (mapv keyJoined joinedFrame) joinedFrame))
   (vals (merge-with merge ds_one ds_two))
   )
-
 (defn leftJoin
   [firstFrame joinedFrame keyFirst keyJoined]
   (filter #(some (partial contains? %) (list keyFirst)) (vec (fullJoin firstFrame joinedFrame keyFirst keyJoined)))
@@ -370,6 +373,15 @@
     )
   )
 
+(defn filterByHaving
+  [initFrame qMap]
+    (if (nil? (get qMap "HAVING"))
+      initFrame
+      (modWhereSingle initFrame (get qMap "HAVING"))
+      )
+  )
+
+;"HAVING" (:AVG (col) >20)
 (defn createQueryMap
   [query-splited]
   (getJoinType (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (query-map query-splited {} 0)
@@ -413,7 +425,7 @@
         (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFSbyIWandJoin qMap)) 0 (parseColNamesIJ (get qMap "SELECT")) qMap) qMap)))
       (print
         (vec (remove nil? (distinct (flatten (getFrameKeys (groupBy (vec (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) 0 (get qMap "SELECT") qMap) qMap)) qMap (vector) (first (get qMap "GROUP")) 0) 0)))))
-        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (groupBy (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) qMap (vector) (first (get qMap "GROUP")) 0) 0 (get qMap "SELECT") qMap) qMap)))
+        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (filterByHaving (groupBy (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) qMap (vector) (first (get qMap "GROUP")) 0) qMap) 0 (get qMap "SELECT") qMap) qMap)))
       )
     )
   ;SELECT mzs.csv.title mp-posts.csv.full_name FROM mzs.csv INNER JOIN mp-posts.csv ON mzs.csv.title=mp-posts.csv.full_name
