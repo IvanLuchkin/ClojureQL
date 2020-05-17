@@ -114,11 +114,23 @@
 
 ;takes initial DF (file), 0, qMap and selectOption (SELECT / SELECT DISTINCT), returns DF with selected keys
 (defn getDFwithSelCols
+  [initFrame pos colList qMap]
+  (if (get qMap "GROUP_BY")
+    initFrame
+    (if (< pos (count initFrame))
+      (if (or (some (partial = :AVG) colList) (some (partial = :MIN) colList) (some (partial = :COUNT) colList))
+        (concat (calcAggFunc initFrame (list (first colList) (second colList))) (conj (getDFwithSelCols initFrame (+ 1 pos) (rest (rest colList)) qMap) (colsFromMap (get initFrame pos) (rest (rest colList)) {}))) ;;;;;;;;
+        (conj (getDFwithSelCols initFrame (+ 1 pos) colList qMap) (colsFromMap (get initFrame pos) colList {})))
+      )
+    )
+  )
+
+(defn getGroupedDF
   [initFrame pos colList]
   (if (< pos (count initFrame))
     (if (or (some (partial = :AVG) colList) (some (partial = :MIN) colList) (some (partial = :COUNT) colList))
-      (concat (calcAggFunc initFrame (list (first colList) (second colList))) (conj (getDFwithSelCols initFrame (+ 1 pos) (rest (rest colList))) (colsFromMap (get initFrame pos) (rest (rest colList)) {}))) ;;;;;;;;
-      (conj (getDFwithSelCols initFrame (+ 1 pos) colList) (colsFromMap (get initFrame pos) colList {})))
+      (concat (calcAggFunc initFrame (list (first colList) (second colList))) (conj (getGroupedDF initFrame (+ 1 pos) (rest (rest colList))) (colsFromMap (get initFrame pos) (rest (rest colList)) {}))) ;;;;;;;;
+      (conj (getGroupedDF initFrame (+ 1 pos) colList) (colsFromMap (get initFrame pos) colList {})))
     )
   )
 
@@ -131,16 +143,19 @@
     )
   )
 ;three following functions convert raw data from the file into VEC of MAPS (dataframe)
-(defn readTSV [name]
+(defn readTSV
+  [name]
   (with-open [reader (io/reader name)]
     (doall
       (csv/read-csv reader :separator \tab))))
-(defn readCSV [name]
+(defn readCSV
+  [name]
   (with-open [reader (io/reader name)]
     (doall
       (csv/read-csv reader))))
-(defn rawDataToMapVec [head & lines]
-  (vec (map #(zipmap (map keyword head) %1) lines)))
+(defn rawDataToMapVec
+  [head & lines]
+    (vec (map #(zipmap (map keyword head) %1) lines)))
 
 (defn checkFormat [name]
   (def fformat (str/split name #"\."))
@@ -324,20 +339,35 @@
     )
   )
 
-(defn createSubset
-  [initFrame resFrame val pos]
-  (if (< pos (count initFrame))
-
-
-
-
+(defn mergeMapsInList
+  [list]
+  (if (not (empty? (rest list)))
+    (conj (mergeMapsInList (rest list)) (merge (first (first list)) (second (first list))))
     )
+  )
 
+(defn createSubset
+  [initFrame subSet key val pos]
+  (if (< pos (count initFrame))
+    (if (= (get (get initFrame pos) key) val)
+      (createSubset initFrame (conj subSet (get initFrame pos)) key val (+ 1 pos))
+      (createSubset initFrame subSet key val (+ 1 pos))
+      )
+    subSet
+    )
   )
 
 (defn groupBy
   [initFrame qMap resFrame key pos]
-
+  (if (get qMap "GROUP_BY")
+    (if (< pos (count initFrame))
+      (if (not (empty? (createSubset initFrame (vector) key (get (get initFrame pos) key) 0)))
+        (groupBy initFrame qMap (conj resFrame (distinct (getGroupedDF (createSubset initFrame (vector) key (get (get initFrame pos) key) 0) 0 (get qMap "SELECT")))) key (+ 1 pos))
+        )
+      (vec (mergeMapsInList (distinct resFrame)))
+      )
+    initFrame
+    )
   )
 
 (defn createQueryMap
@@ -370,16 +400,20 @@
     )
   (if (get qMap "DISTINCT")
     (if (not (nil? (get qMap "JOIN")))
-      (print (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (distinct (vec (modifyDFSbyIWandJoin qMap))) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)) 0)))
-        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols  (distinct (vec (modifyDFSbyIWandJoin qMap))) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)))
-      (print (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (distinct (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE")))) 0 (get qMap "SELECT")) qMap)) 0)))
-        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (distinct (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE")))) 0 (get qMap "SELECT")) qMap)))
+      (print
+        (vec (remove nil? (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (distinct (vec (modifyDFSbyIWandJoin qMap))) 0 (parseColNamesIJ (get qMap "SELECT")) qMap) qMap)) 0)))))
+        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols  (distinct (vec (modifyDFSbyIWandJoin qMap))) 0 (parseColNamesIJ (get qMap "SELECT")) qMap) qMap)))
+      (print
+        (vec (remove nil? (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (distinct (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE")))) 0 (get qMap "SELECT") qMap) qMap)) 0)))))
+        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (distinct (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE")))) 0 (get qMap "SELECT") qMap) qMap)))
       )
     (if (not (nil? (get qMap "JOIN")))
-      (print (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFSbyIWandJoin qMap)) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)) 0)))
-        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFSbyIWandJoin qMap)) 0 (parseColNamesIJ (get qMap "SELECT"))) qMap)))
-      (print (vec (remove nil? (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) 0 (get qMap "SELECT")) qMap)) 0)))))
-        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) 0 (get qMap "SELECT")) qMap)))
+      (print
+        (vec (remove nil? (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFSbyIWandJoin qMap)) 0 (parseColNamesIJ (get qMap "SELECT")) qMap) qMap)) 0)))))
+        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFSbyIWandJoin qMap)) 0 (parseColNamesIJ (get qMap "SELECT")) qMap) qMap)))
+      (print
+        (vec (remove nil? (distinct (flatten (getFrameKeys (groupBy (vec (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) 0 (get qMap "SELECT") qMap) qMap)) qMap (vector) (first (get qMap "GROUP")) 0) 0)))))
+        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (groupBy (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) qMap (vector) (first (get qMap "GROUP")) 0) 0 (get qMap "SELECT") qMap) qMap)))
       )
     )
   ;SELECT mzs.csv.title mp-posts.csv.full_name FROM mzs.csv INNER JOIN mp-posts.csv ON mzs.csv.title=mp-posts.csv.full_name
