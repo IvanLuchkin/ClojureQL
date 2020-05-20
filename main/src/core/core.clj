@@ -7,8 +7,10 @@
             [clojure.pprint :refer [print-table] :rename {print-table print}]
             [clojure.set :as set]))
 
-(def keywords '("SELECT", "FROM", "WHERE", "ON", "GROUP", "HAVING", "ORDER"))
-(def kw_multi_arity '("SELECT", "WHERE", "ORDER", "INNER", "FULL", "LEFT", "GROUP", "HAVING"))
+(def keywords '("SELECT", "FROM", "WHERE", "ON", "GROUP", "HAVING", "ORDER", "CASE", "ELSE", "END"))
+(def kw_multi_arity '("SELECT", "WHERE", "ORDER", "INNER", "FULL", "LEFT", "GROUP", "HAVING", "CASE", "ELSE", "END"))
+
+;SELECT col title CASE WHEN col>30 THEN The quantity is greater than 30 WHEN col=30 THEN The quantity is 30 ELSE The quantity is under 30 END AS QuantityText FROM mzs.csv
 
 (defn isKeyword
   [word]
@@ -22,16 +24,14 @@
   [input_string_splitted]
   (if (not (empty? input_string_splitted))
     (if (not (isKeyword (first input_string_splitted)))
-      (if (or (= (first input_string_splitted) "AND") (= (first input_string_splitted) "OR") (= (first input_string_splitted) "BY") (= (first input_string_splitted) "DESC") (= (first input_string_splitted) "JOIN"))
+      (if (or (= (first input_string_splitted) "AND") (= (first input_string_splitted) "OR") (= (first input_string_splitted) "BY") (= (first input_string_splitted) "DESC") (= (first input_string_splitted) "JOIN") (= (first input_string_splitted) "AS"))
         (analyze-arguments (rest input_string_splitted))
         (conj (analyze-arguments (rest input_string_splitted)) (keyword (first input_string_splitted)))
-        )  ;--------change--------
-      ;(analyze-arguments (rest input_string_splitted)) ; -- if uncommented, returns a LIST of all args in query, if commented - return a LIST of all args till next kw
+        )
       )
     )
   )
 
-;takes VEC of vals, converts any integer-string into integers
 (defn makeIntegersInVector
   [vector pos acc]
   (if (< pos (count vector))
@@ -43,7 +43,6 @@
     )
   )
 
-;takes initial DF with integer-string values, returns DF with integers (where needed)
 (defn makeIntegersInDF
   [initialFrame pos acc]
   (if (< pos (count initialFrame))
@@ -381,29 +380,59 @@
       )
   )
 
-;"HAVING" (:AVG (col) >20)
-(defn createQueryMap
-  [query-splited]
-  (getJoinType (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (query-map query-splited {} 0)
-                                                                                "AND" (= true (some (partial = "AND") query-splited)))
-                                                                         "OR" (= true (some (partial = "OR") query-splited)))
-                                                                  "DISTINCT" (= true (some (partial = "DISTINCT") query-splited)))
-                                                           "ORDER_BY" (= true (and (some (partial = "ORDER") query-splited) (some (partial = "BY") query-splited))))
-                                                    "DESC" (= true (some (partial = "DESC") query-splited)))
-                                             "SEL_FUNC" (= true (or (some (partial = "AVG") query-splited) (some (partial = "MIN") query-splited) (some (partial = "COUNT") query-splited))))
-                                      "INNER_JOIN" (= true (some (partial = "INNER") query-splited)))
-                               "FULL_JOIN" (= true (some (partial = "FULL") query-splited)))
-                        "LEFT_JOIN" (= true (some (partial = "LEFT") query-splited)))
-                 "GROUP_BY" (= true (some (partial = "GROUP") query-splited))))
+(defn caseKW
+  [initFrame qMap pos resFrame]
+  (if (get qMap "HAS_CASE")
+    (if (< pos (count initFrame))
+      (if ((resolve (symbol (get (changeCond (parseWhereCond (get (str/split (get (get qMap "CASE") 0) #" THEN ") 0))) 2)))
+                   (get (get initFrame pos) (get (changeCond (parseWhereCond (get (str/split (get (get qMap "CASE") 0) #" THEN ") 0))) 0))
+                   (get (changeCond (parseWhereCond (get (str/split (get (get qMap "CASE") 0) #" THEN ") 0))) 1))
+        (caseKW initFrame qMap (+ 1 pos) (conj resFrame (assoc (get initFrame pos) (first (get qMap "END")) (get (str/split (get (get qMap "CASE") 0) #" THEN ") 1))))
+        (if ((resolve (symbol (get (changeCond (parseWhereCond (get (str/split (get (get qMap "CASE") 1) #" THEN ") 0))) 2)))
+             (get (get initFrame pos) (get (changeCond (parseWhereCond (get (str/split (get (get qMap "CASE") 0) #" THEN ") 0))) 0))
+             (get (changeCond (parseWhereCond (get (str/split (get (get qMap "CASE") 1) #" THEN ") 0))) 1))
+          (caseKW initFrame qMap (+ 1 pos) (conj resFrame (assoc (get initFrame pos) (first (get qMap "END")) (get (str/split (get (get qMap "CASE") 1) #" THEN ") 1))))
+          (caseKW initFrame qMap (+ 1 pos) (conj resFrame (assoc (get initFrame pos) (first (get qMap "END")) (get (get qMap "CASE") 2))))
+          )
+        )
+      resFrame
+      )
+      initFrame
+    )
   )
 
+(defn createQueryMap
+  [query-splited query]
+  (def qMap (getJoinType (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (assoc (query-map query-splited {} 0)
+                                                                                                        "AND" (= true (some (partial = "AND") query-splited)))
+                                                                                                 "OR" (= true (some (partial = "OR") query-splited)))
+                                                                                          "DISTINCT" (= true (some (partial = "DISTINCT") query-splited)))
+                                                                                   "ORDER_BY" (= true (and (some (partial = "ORDER") query-splited) (some (partial = "BY") query-splited))))
+                                                                            "DESC" (= true (some (partial = "DESC") query-splited)))
+                                                                     "SEL_FUNC" (= true (or (some (partial = "AVG") query-splited) (some (partial = "MIN") query-splited) (some (partial = "COUNT") query-splited))))
+                                                              "INNER_JOIN" (= true (some (partial = "INNER") query-splited)))
+                                                       "FULL_JOIN" (= true (some (partial = "FULL") query-splited)))
+                                                "LEFT_JOIN" (= true (some (partial = "LEFT") query-splited)))
+                                         "GROUP_BY" (= true (some (partial = "GROUP") query-splited)))
+                                  "HAS_CASE" (= true (some (partial = "CASE") query-splited)))
+                           "CASE" (conj (conj (conj (vector) (get (subvec (str/split query #" WHEN ") 1) 0))
+                                              (get (str/split (get (subvec (str/split query #" WHEN ") 1) (- (count (subvec (str/split query #" WHEN ") 1)) 1)) #" ELSE ") 0))
+                                        (get (str/split (get (str/split (get (subvec (str/split query #" WHEN ") 1) (- (count (subvec (str/split query #" WHEN ") 1)) 1)) #" ELSE ") 1) #" END") 0)))))
+  (if (get qMap "HAS_CASE")
+    (assoc qMap "SELECT" (apply list (conj (vec (get qMap "SELECT")) (first (get qMap "END")))))
+    )
+  )
+
+
+;(changeCond (parseWhereCond (get (str/split (get (get qMap "CASE") 0) #" THEN ") 0)))
 (defn -main
   [& args]
   ;receiving a query
   (def query (read-line))
-  (def query-splited (str/split query #" "))
+  ;(str/split query #" WHEN ") -> (str/split query #" ELSE ")
+  (def query-splited (vec (filter #(and (not (= "WHEN" %)) (not (= "THEN" %))) (str/split query #" "))))
   ;creating a map with keywords & args
-  (def qMap (createQueryMap query-splited))
+  (def qMap (createQueryMap query-splited query))
 
   ;creating a dataframe (vec of maps) from the file (.csv or .tsv)
   (if (checkFormat (get qMap "FROM"))
@@ -424,8 +453,8 @@
         (vec (remove nil? (distinct (flatten (getFrameKeys (vec (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFSbyIWandJoin qMap)) 0 (parseColNamesIJ (get qMap "SELECT")) qMap) qMap)) 0)))))
         (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFSbyIWandJoin qMap)) 0 (parseColNamesIJ (get qMap "SELECT")) qMap) qMap)))
       (print
-        (vec (remove nil? (distinct (flatten (getFrameKeys (groupBy (vec (modifyDFbyOrderCond (getDFwithSelCols (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) 0 (get qMap "SELECT") qMap) qMap)) qMap (vector) (first (get qMap "GROUP")) 0) 0)))))
-        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (filterByHaving (groupBy (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) qMap (vector) (first (get qMap "GROUP")) 0) qMap) 0 (get qMap "SELECT") qMap) qMap)))
+        (vec (remove nil? (distinct (flatten (getFrameKeys (groupBy (vec (modifyDFbyOrderCond (getDFwithSelCols (caseKW (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) qMap 0 (vector)) 0 (get qMap "SELECT") qMap) qMap)) qMap (vector) (first (get qMap "GROUP")) 0) 0)))))
+        (remove empty? (modifyDFbyOrderCond (getDFwithSelCols (caseKW (filterByHaving (groupBy (vec (modifyDFbyWhereCond dataframe qMap (get qMap "WHERE"))) qMap (vector) (first (get qMap "GROUP")) 0) qMap) qMap 0 (vector)) 0 (get qMap "SELECT") qMap) qMap)))
       )
     )
   ;SELECT mzs.csv.title mp-posts.csv.full_name FROM mzs.csv INNER JOIN mp-posts.csv ON mzs.csv.title=mp-posts.csv.full_name
